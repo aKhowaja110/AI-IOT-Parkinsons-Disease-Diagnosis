@@ -1,18 +1,21 @@
 import json
-from pydoc import doc
-from time import strftime
-from flask import Flask, current_app, flash, render_template, url_for, request, session, redirect, Response, \
-    jsonify  # render_template can be used to access html files
-from flask_mysqldb import MySQL
-
-from flask import flash
+from flask import Flask, flash, render_template, url_for, request, session, redirect, Response,jsonify 
+from flask_mysqldb import MySQL, MySQLdb
 import datetime as dt
-from functools import wraps
 from datetime import timedelta
-import datetime
 import smtplib
 from password_strength import PasswordPolicy, PasswordStats
-
+import numpy as np
+import joblib
+import mediapipe as mp
+from helpers import predict
+from werkzeug.utils import secure_filename
+import cv2, os
+import pandas as pd
+import math
+import pandas as pd
+import time
+from apscheduler.schedulers.background import BackgroundScheduler
 
 def load_key():
     return open("secret.key", "rb").read()
@@ -24,13 +27,26 @@ def load_count():
 
 app = Flask(__name__)
 mysql = MySQL(app)
+
+db_config = {
+    'host': 'localhost',
+    'user': 'root',
+    'passwd': 'password',
+    'db': 'parkinson_diagnosis_fyp',
+    'port': 3306,
+    'charset': 'utf8'
+}
+
 app.config['MYSQL_HOST'] = 'localhost'
 app.config['MYSQL_USER'] = 'root'
-app.config['MYSQL_PASSWORD'] = 'Pasha12@'
-app.config['MYSQL_DB'] = 'hospital'
+app.config['MYSQL_PASSWORD'] = 'password'
+app.config['MYSQL_DB'] = 'parkinson_diagnosis_fyp'
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=30)
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=30)
 app.config['SECRET_KEY'] = "abc/djiejdei"
+
+scheduler = BackgroundScheduler()
+scheduler.start()
 
 policy = PasswordPolicy.from_names(
     length=8,
@@ -38,6 +54,59 @@ policy = PasswordPolicy.from_names(
     numbers=1,
     strength=0.66
 )
+
+gait_model = joblib.load('gait_model.sav')
+
+
+def allowed_file(filename):
+    allowed_extensions = {'mp4', 'avi', 'mkv', 'mov'}  # Add more extensions if needed
+    return '.' + filename and filename.rsplit('.', 1)[1].lower() in allowed_extensions
+
+def sched_gait_predict(file_path, participant_mr, show_video=False):
+    df = predict(file_path, show_video)
+    print("These are columns ,",df.columns,len(df.columns))
+    print("Participant MR: ", participant_mr)
+    prediction = gait_model.predict(df)
+    print("Prediction: ", prediction[0])
+    cur = MySQLdb.connect(**db_config).cursor()
+    cur.execute("INSERT INTO ensemble(participant_mr, gait) VALUES (%s, %s)", (participant_mr, prediction[0]))
+    cur.connection.commit()
+    cur.close()
+    print("Processing Ended")
+    return "success"
+
+@scheduler.scheduled_job('interval', minutes=1)
+def pd_predict():
+    cur = MySQLdb.connect(**db_config).cursor()
+    cur.execute("SELECT * FROM ensemble where participant_mr is not null and gait is not null and speech is not null and tremor is not null and muscle is not null and finger_tap is not null")
+    data = cur.fetchall()
+    cur.close()
+    print("Data: ", data)
+
+@app.route('/predict_gait', methods=['POST','GET'])
+def predict_gait():
+
+    if "email" in session.keys() and "password" in session.keys():
+       
+        if request.method == 'POST':
+            file = request.files['video']
+            print("File is ",file)
+            if 'video' not in request.files:
+                pass
+            
+            if file.filename == '':
+                pass
+
+            if file and allowed_file(file.filename):
+                filename = secure_filename(file.filename)
+                file.save(os.path.join('UPLOAD_FOLDER/', filename))
+                print("Process Video is called")
+                scheduler.add_job(sched_gait_predict, 'date', run_date=dt.datetime.now() + timedelta(seconds=5), args=[os.path.join('UPLOAD_FOLDER', filename), session["participant_mr"], False]) #, 1, False
+                return render_template('add/process_video.html', user=session['name'], process=True)
+        return render_template('add/process_video.html', user=session['name'])    
+    else:
+        flash('You must be login before accessing this page')
+        return redirect(url_for('login'))
 
 
 @app.route('/pres', methods=['GET', 'POST'])
@@ -100,7 +169,7 @@ def home():
 
 @app.route('/')
 def homebase():
-    return render_template('view/homebase.html')
+    return render_template('view/default.html')
 
 
 @app.route('/signup', methods=['GET', 'POST'])
@@ -154,11 +223,11 @@ def signup():
         with open("participantcount.txt", "w") as f:
             f.write(str(count))
 
-        gmail_user = 'bscs2012164@szabist.pk'
-        gmail_password = 'gxdekzynwxzhilek'
+        gmail_user = 'mohammadhammad9801@gmail.com'
+        gmail_password = 'lmin wowt vqeq tuue'
         UrL = "http://127.0.0.1:5000/confirmParticipant";
         sent_from = gmail_user
-        to = 'mohammadhammad9801@gmail.com'
+        to = ['mohammadhammad9801@gmail.com', "mufaddalhatim53@gmail.com"]
         subject = 'Participant Confirmation mail '
         body = 'A new participant just registered in our hospital please accept or reject it' + "\n" + UrL
 
@@ -168,7 +237,7 @@ def signup():
         Subject: %s
 
         %s
-        """ % (sent_from, ", ".join(to), subject, body)
+        """ % (sent_from, to, subject, body)
         print("Email Is Sending")
         try:
             smtp_server = smtplib.SMTP_SSL('smtp.gmail.com', 465)
@@ -353,16 +422,6 @@ def Participantupdate():
         return redirect(url_for('login'))
 
 
-
-
-
-
-
-
-
-
-
-
 @app.route('/doctorlogin', methods=['GET', 'POST'])
 def doctorlogin():
     if request.method == 'POST':
@@ -401,14 +460,14 @@ def doctorlogin():
 
     else:
         if "doctoremail" and "doctorpassword" in session:
-            return redirect(url_for('doctorhome'),user=session['doctor_name'])
+            return redirect(url_for('doctorhome'))
 
     return render_template('add/doctorLogin.html')
 
 
+
 @app.route('/makeroute')
 def makeroute():
-
 
     cursor = mysql.connection.cursor()
     cursor.execute(
@@ -461,6 +520,7 @@ def addappointment(user):
 
 @app.route('/participantvideo', methods=['POST', 'GET'])
 def participantvideo():
+
     video_url = request.data
     vid = video_url.decode("UTF-8")
     print("The url of video is " + vid)
@@ -478,6 +538,7 @@ def participantvideo():
 
 @app.route('/logout')
 def logout():
+
     if "email" and "password" in session:
         session.pop('email', None)
         session.pop('password', None)
@@ -492,6 +553,7 @@ def logout():
 
 @app.route('/doctorhome')
 def doctorhome():
+
     if "doctoremail" and "doctorpassword" in session:
 
         return render_template('view/doctorhome.html', user=session['doctor_name'])
@@ -503,6 +565,7 @@ def doctorhome():
 
 @app.route('/doctorupdate', methods=['POST', 'GET'])
 def doctorupdate():
+
     if "doctoremail" and "doctorpassword" in session:
 
         if request.method == 'POST':
@@ -546,6 +609,7 @@ def doctorupdate():
 
 @app.route('/doctorlogout')
 def doctorlogout():
+
     session.pop('doctoremail', None)
     session.pop('doctorpassword', None)
     session.pop('doctor_name', None)
@@ -555,6 +619,7 @@ def doctorlogout():
 
 @app.route('/prescription')
 def prescription():
+
     if "email" and "password" in session:
         cursor = mysql.connection.cursor()
         cursor.execute(" SELECT patient_mr,doctor_name,date,symptoms,test,advice,medicine FROM prescription WHERE Patient_Mr= %s ", (session['participant_mr'],))
@@ -568,6 +633,7 @@ def prescription():
 
 @app.route('/addDoctors', methods=['GET', 'POST'])
 def addDoctors():
+
     if "adminemail" and "adminpassword" in session:
 
         if (request.method == 'POST'):
@@ -607,6 +673,7 @@ def addDoctors():
 
 @app.route('/admin', methods=['POST', 'GET'])
 def admin():
+
     if (request.method == 'POST'):
 
         email = request.form.get('email')
@@ -635,6 +702,7 @@ def admin():
 
 @app.route('/showDoctors')
 def showDoctors():
+
     if "adminemail" and "adminpassword" in session:
 
         cursor = mysql.connection.cursor()
@@ -651,6 +719,7 @@ def showDoctors():
 
 @app.route('/showparticipants')
 def showparticipant():
+
     if "adminemail" and "adminpassword" in session:
         cursor = mysql.connection.cursor()
         cursor.execute(
@@ -666,6 +735,7 @@ def showparticipant():
 
 @app.route('/adminHome')
 def adminHome():
+
     if "adminemail" and "adminpassword" in session:
         return render_template('view/adminHome.html', user=session['adminName'])
     else:
@@ -675,6 +745,7 @@ def adminHome():
 
 @app.route('/adminLogout')
 def adminLogout():
+
     session.pop('adminemail', None)
     session.pop('adminpassword', None)
     session.pop('adminName', None)
@@ -683,6 +754,7 @@ def adminLogout():
 
 @app.route('/docdelete/<string:user>', methods=['GET', 'POST'])
 def docdelete(user):
+
     data = json.loads(user)
     cursor = mysql.connection.cursor()
     cursor.execute("DELETE FROM doctor WHERE  id=%s", (data['id'],))
@@ -699,6 +771,7 @@ def sendmail():
 
 @app.route('/accept/<string:user>', methods=['GET', 'POST'])
 def accept(user):
+
     data = json.loads(user)
     cur = mysql.connection.cursor()
     cur.execute("SELECT * FROM pendingParticipants WHERE name=%s ", (data['name'],))
@@ -746,6 +819,7 @@ def accept(user):
 
 @app.route('/reject/<string:user>', methods=['GET', 'POST'])
 def reject(user):
+
     data = json.loads(user)
     email = data['email']
     cur = mysql.connection.cursor()

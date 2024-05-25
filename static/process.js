@@ -6,9 +6,6 @@ $(document).ready(function() {
             arr.push($(this).text());
         });
 
-        console.log($row)
-        console.log(arr[1]);
-        console.log(arr);
         myVar = arr[1];
         let user = {
             name: arr[0]
@@ -21,7 +18,8 @@ $(document).ready(function() {
             console.log(flaskMessage)
         }
         request.send();
-
+        alert("Appointment Added Successfully");
+        window.location.reload();
     });
 
 
@@ -72,9 +70,11 @@ $(document).ready(function() {
 
         request.onload = () => {
             const flaskMessage = request.responseText
+            // window.location.reload();
             console.log(flaskMessage)
         }
         request.send();
+        window.location.reload();
 
 
 
@@ -131,6 +131,7 @@ $(document).ready(function() {
 
         request.onload = () => {
             const flaskMessage = request.responseText
+            window.location.reload();
             console.log(flaskMessage)
         }
         request.send();
@@ -159,6 +160,7 @@ $(document).ready(function() {
 
         request.onload = () => {
             const flaskMessage = request.responseText
+            window.location.reload();
             console.log(flaskMessage)
         }
         request.send();
